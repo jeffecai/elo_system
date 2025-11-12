@@ -21,6 +21,10 @@ class ELOSystem:
         self.initial_rating = initial_rating
         self.ratings = {}  # {图像路径: ELO分数}
         self.comparison_counts = {}  # {图像路径: 比对次数}
+        
+        # 收敛判断相关数据
+        self.rating_history = []  # 记录每轮后的分数快照 [{图像路径: 分数}, ...]
+        self.rating_changes = []  # 记录每轮的最大/平均分数变化量
     
     def add_image(self, image_path):
         """添加新图像到系统"""
@@ -77,6 +81,93 @@ class ELOSystem:
     def get_comparison_count(self, image_path):
         """获取图像的比对次数"""
         return self.comparison_counts.get(image_path, 0)
+    
+    def record_rating_snapshot(self):
+        """记录当前分数快照"""
+        snapshot = self.ratings.copy()
+        self.rating_history.append(snapshot)
+        
+        # 如果历史记录超过100轮，只保留最近100轮
+        if len(self.rating_history) > 100:
+            self.rating_history = self.rating_history[-100:]
+    
+    def calculate_rating_changes(self):
+        """计算分数变化量（最大和平均）"""
+        if len(self.rating_history) < 2:
+            return None, None
+        
+        # 获取最近两轮的分数
+        current_ratings = self.rating_history[-1]
+        previous_ratings = self.rating_history[-2]
+        
+        # 计算所有图像分数变化的绝对值
+        changes = []
+        all_images = set(current_ratings.keys()) | set(previous_ratings.keys())
+        
+        for img_path in all_images:
+            current = current_ratings.get(img_path, self.initial_rating)
+            previous = previous_ratings.get(img_path, self.initial_rating)
+            change = abs(current - previous)
+            changes.append(change)
+        
+        if not changes:
+            return None, None
+        
+        max_change = max(changes)
+        avg_change = sum(changes) / len(changes)
+        
+        # 记录变化量
+        self.rating_changes.append({'max': max_change, 'avg': avg_change})
+        if len(self.rating_changes) > 100:
+            self.rating_changes = self.rating_changes[-100:]
+        
+        return max_change, avg_change
+    
+    def calculate_rank_stability(self):
+        """计算排名稳定性（Spearman相关系数）"""
+        if len(self.rating_history) < 2:
+            return None
+        
+        # 获取最近两轮的分数
+        current_ratings = self.rating_history[-1]
+        previous_ratings = self.rating_history[-2]
+        
+        # 获取所有图像
+        all_images = list(set(current_ratings.keys()) | set(previous_ratings.keys()))
+        
+        if len(all_images) < 2:
+            return None
+        
+        # 计算当前排名
+        current_ranked = sorted(all_images, 
+                               key=lambda x: current_ratings.get(x, self.initial_rating), 
+                               reverse=True)
+        # 计算上一轮排名
+        previous_ranked = sorted(all_images, 
+                                key=lambda x: previous_ratings.get(x, self.initial_rating), 
+                                reverse=True)
+        
+        # 计算Spearman相关系数
+        # 创建排名字典
+        current_ranks = {img: i+1 for i, img in enumerate(current_ranked)}
+        previous_ranks = {img: i+1 for i, img in enumerate(previous_ranked)}
+        
+        # 计算排名差
+        rank_diffs = []
+        for img in all_images:
+            current_rank = current_ranks.get(img, len(all_images))
+            previous_rank = previous_ranks.get(img, len(all_images))
+            rank_diffs.append((current_rank - previous_rank) ** 2)
+        
+        # Spearman相关系数公式: 1 - (6 * sum(d^2)) / (n * (n^2 - 1))
+        n = len(all_images)
+        if n < 2:
+            return None
+        
+        sum_d_squared = sum(rank_diffs)
+        spearman_rho = 1 - (6 * sum_d_squared) / (n * (n * n - 1))
+        
+        return spearman_rho
     
     def set_parameters(self, k_factor, initial_rating):
         """设置ELO参数"""
@@ -465,6 +556,9 @@ class MatchWindow:
         # 增加比较计数
         if self.gui_instance:
             self.gui_instance.comparison_count += 1
+            # 每10次比较记录一次分数快照（用于收敛判断）
+            if self.gui_instance.comparison_count % 10 == 0:
+                self.elo_system.record_rating_snapshot()
         
         # 更新主界面
         if self.update_callback:
@@ -500,6 +594,9 @@ class MatchWindow:
         # 增加比较计数
         if self.gui_instance:
             self.gui_instance.comparison_count += 1
+            # 每10次比较记录一次分数快照（用于收敛判断）
+            if self.gui_instance.comparison_count % 10 == 0:
+                self.elo_system.record_rating_snapshot()
         
         # 更新主界面
         if self.update_callback:
@@ -664,19 +761,23 @@ class ELOSystemGUI:
         tk.Button(params_frame, text="保存参数", font=("Arial", 11),
                  command=self.save_config, bg='#607D8B', fg='white').pack(pady=10)
         
-        # 信息显示区域（小框）
+        # 信息显示区域（可扩展）
         info_frame = tk.LabelFrame(right_panel, text="系统信息", 
                                   font=("Arial", 12, "bold"), padx=10, pady=10)
-        info_frame.pack(fill=tk.X, pady=10)
+        info_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
         self.info_text = tk.Text(info_frame, wrap=tk.WORD, font=("Arial", 9),
-                                height=8, width=50)
-        self.info_text.pack(fill=tk.X)
+                                height=15, width=50)
+        self.info_text.pack(fill=tk.BOTH, expand=True)
         
-        scrollbar_info = tk.Scrollbar(info_frame, orient=tk.HORIZONTAL)
-        scrollbar_info.pack(side=tk.BOTTOM, fill=tk.X)
-        self.info_text.config(xscrollcommand=scrollbar_info.set)
-        scrollbar_info.config(command=self.info_text.xview)
+        # 添加纵向滚动条
+        scrollbar_info_v = tk.Scrollbar(info_frame, orient=tk.VERTICAL)
+        scrollbar_info_v.pack(side=tk.RIGHT, fill=tk.Y)
+        scrollbar_info_h = tk.Scrollbar(info_frame, orient=tk.HORIZONTAL)
+        scrollbar_info_h.pack(side=tk.BOTTOM, fill=tk.X)
+        self.info_text.config(yscrollcommand=scrollbar_info_v.set, xscrollcommand=scrollbar_info_h.set)
+        scrollbar_info_v.config(command=self.info_text.yview)
+        scrollbar_info_h.config(command=self.info_text.xview)
         
         self.update_info()
     
@@ -731,6 +832,10 @@ class ELOSystemGUI:
             else:
                 # 如果没有分数文件，重置计数
                 self.comparison_count = 0
+            
+            # 记录初始分数快照
+            if self.image_list:
+                self.elo_system.record_rating_snapshot()
             
             # 更新列表显示
             self.update_image_list()
@@ -927,6 +1032,66 @@ class ELOSystemGUI:
         info += f"已标记对数: {self.comparison_count}\n"
         info += f"K因子: {self.k_factor_var.get()}\n"
         info += f"初始评分: {self.initial_rating_var.get()}\n\n"
+        
+        # 收敛判断信息
+        if len(self.elo_system.rating_history) >= 2:
+            max_change, avg_change = self.elo_system.calculate_rating_changes()
+            spearman_rho = self.elo_system.calculate_rank_stability()
+            
+            info += "=== 收敛判断 ===\n"
+            
+            # 1. 最大/平均单轮分数变化量
+            if max_change is not None and avg_change is not None:
+                info += f"最大分数变化量 (Δmax): {max_change:.3f}\n"
+                info += f"平均分数变化量 (Δavg): {avg_change:.3f}\n"
+                
+                # 检查是否连续T轮都小于阈值
+                if len(self.elo_system.rating_changes) >= 5:
+                    recent_changes = self.elo_system.rating_changes[-5:]
+                    threshold = 1.0  # ε = 1分
+                    all_below_threshold = all(c['max'] < threshold for c in recent_changes)
+                    if all_below_threshold:
+                        info += f"✓ 连续5轮 Δmax < {threshold}，可能已收敛\n"
+                    else:
+                        info += f"  连续5轮 Δmax < {threshold}: 否\n"
+                info += "\n"
+            
+            # 2. 排名稳定性
+            if spearman_rho is not None:
+                info += f"排名稳定性 (Spearman ρ): {spearman_rho:.4f}\n"
+                
+                # 检查是否连续T轮都大于阈值
+                if len(self.elo_system.rating_history) >= 5:
+                    recent_rhos = []
+                    for i in range(max(1, len(self.elo_system.rating_history) - 4), len(self.elo_system.rating_history)):
+                        if i >= 1:
+                            # 临时计算每轮的rho
+                            current = self.elo_system.rating_history[i]
+                            previous = self.elo_system.rating_history[i-1]
+                            all_images = list(set(current.keys()) | set(previous.keys()))
+                            if len(all_images) >= 2:
+                                current_ranked = sorted(all_images, 
+                                                       key=lambda x: current.get(x, self.elo_system.initial_rating), 
+                                                       reverse=True)
+                                previous_ranked = sorted(all_images, 
+                                                         key=lambda x: previous.get(x, self.elo_system.initial_rating), 
+                                                         reverse=True)
+                                current_ranks = {img: j+1 for j, img in enumerate(current_ranked)}
+                                previous_ranks = {img: j+1 for j, img in enumerate(previous_ranked)}
+                                rank_diffs = [(current_ranks.get(img, len(all_images)) - previous_ranks.get(img, len(all_images))) ** 2 
+                                             for img in all_images]
+                                n = len(all_images)
+                                rho = 1 - (6 * sum(rank_diffs)) / (n * (n * n - 1))
+                                recent_rhos.append(rho)
+                    
+                    if recent_rhos:
+                        threshold_rho = 0.99
+                        all_above_threshold = all(rho > threshold_rho for rho in recent_rhos)
+                        if all_above_threshold:
+                            info += f"✓ 连续5轮 ρ > {threshold_rho}，排名已稳定\n"
+                        else:
+                            info += f"  连续5轮 ρ > {threshold_rho}: 否\n"
+                info += "\n"
         
         if self.image_list:
             info += "图像分数排名（前10名）:\n"
