@@ -187,35 +187,49 @@ class MatchWindow:
         image_frame = tk.Frame(self.window)
         image_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
+        # 确保窗口大小变化时左右对称
+        image_frame.grid_rowconfigure(0, weight=1)
+        
+        # 使用grid布局确保左右对称
+        image_frame.grid_columnconfigure(0, weight=1)
+        image_frame.grid_columnconfigure(1, weight=1)
+        
         # 左侧图像
         self.left_frame = tk.Frame(image_frame, relief=tk.RAISED, borderwidth=2)
-        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
+        self.left_frame.grid(row=0, column=0, sticky="nsew", padx=10)
+        
+        # 使用grid布局确保左右canvas大小一致
+        self.left_frame.grid_rowconfigure(1, weight=1)
+        self.left_frame.grid_columnconfigure(0, weight=1)
         
         self.left_label = tk.Label(self.left_frame, text="图像1", font=("Arial", 14))
-        self.left_label.pack(pady=10)
+        self.left_label.grid(row=0, column=0, pady=10)
         
-        self.left_canvas = tk.Canvas(self.left_frame, bg='white', width=400, height=400)
-        self.left_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.left_canvas = tk.Canvas(self.left_frame, bg='white')
+        self.left_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         
         self.left_button = tk.Button(self.left_frame, text="选择这个", 
                                      font=("Arial", 16), bg='#4CAF50', fg='white',
                                      command=lambda: self.select_winner(0))
-        self.left_button.pack(pady=10)
+        self.left_button.grid(row=2, column=0, pady=10)
         
         # 右侧图像
         self.right_frame = tk.Frame(image_frame, relief=tk.RAISED, borderwidth=2)
-        self.right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
+        self.right_frame.grid(row=0, column=1, sticky="nsew", padx=10)
+        
+        self.right_frame.grid_rowconfigure(1, weight=1)
+        self.right_frame.grid_columnconfigure(0, weight=1)
         
         self.right_label = tk.Label(self.right_frame, text="图像2", font=("Arial", 14))
-        self.right_label.pack(pady=10)
+        self.right_label.grid(row=0, column=0, pady=10)
         
-        self.right_canvas = tk.Canvas(self.right_frame, bg='white', width=400, height=400)
-        self.right_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.right_canvas = tk.Canvas(self.right_frame, bg='white')
+        self.right_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         
         self.right_button = tk.Button(self.right_frame, text="选择这个", 
                                       font=("Arial", 16), bg='#4CAF50', fg='white',
                                       command=lambda: self.select_winner(1))
-        self.right_button.pack(pady=10)
+        self.right_button.grid(row=2, column=0, pady=10)
         
         # 按钮区域（平局和跳过）
         button_area = tk.Frame(self.window)
@@ -409,10 +423,19 @@ class ELOSystemGUI:
         main_frame = tk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # 左侧面板 - 图像列表
-        left_panel = tk.Frame(main_frame, width=600)
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 10))
-        left_panel.pack_propagate(False)
+        # 配置主容器使用grid布局，让左右各占50%
+        main_frame.grid_rowconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(1, weight=1)
+        
+        # 左侧面板 - 图像列表（占50%）
+        left_panel = tk.Frame(main_frame)
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        left_panel.grid_rowconfigure(1, weight=1)  # 让列表区域可扩展
+        
+        # 右侧面板 - 参数设置和操作（占50%）
+        right_panel = tk.Frame(main_frame)
+        right_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         
         # 图像列表标题
         list_title = tk.Label(left_panel, text="图像列表（按ELO分数从高到低排序）", font=("Arial", 14, "bold"))
@@ -454,9 +477,6 @@ class ELOSystemGUI:
         v_scrollbar.config(command=self.image_listbox.yview)
         h_scrollbar.config(command=self.image_listbox.xview)
         
-        # 右侧面板 - 参数设置和操作
-        right_panel = tk.Frame(main_frame)
-        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # 操作按钮区域
         button_frame = tk.Frame(right_panel)
@@ -556,6 +576,14 @@ class ELOSystemGUI:
                         scores_data = json.load(f)
                     if 'comparison_count' in scores_data:
                         self.comparison_count = int(scores_data['comparison_count'])
+                    # 加载ELO配置参数
+                    if 'k_factor' in scores_data:
+                        self.k_factor_var.set(float(scores_data['k_factor']))
+                    if 'initial_rating' in scores_data:
+                        self.initial_rating_var.set(float(scores_data['initial_rating']))
+                    # 更新ELO系统参数
+                    self.update_parameters()
+                    # 加载分数
                     if 'scores' in scores_data:
                         for img_path, score in scores_data['scores'].items():
                             if os.path.exists(img_path) and img_path in self.image_list:
@@ -664,6 +692,8 @@ class ELOSystemGUI:
             scores_data = {
                 'directory': self.current_directory,
                 'comparison_count': self.comparison_count,
+                'k_factor': float(self.k_factor_var.get()),
+                'initial_rating': float(self.initial_rating_var.get()),
                 'scores': {}
             }
             for img_path in self.image_list:
@@ -709,6 +739,15 @@ class ELOSystemGUI:
                 self.comparison_count = int(scores_data['comparison_count'])
             else:
                 self.comparison_count = 0
+            
+            # 加载ELO配置参数
+            if 'k_factor' in scores_data:
+                self.k_factor_var.set(float(scores_data['k_factor']))
+            if 'initial_rating' in scores_data:
+                self.initial_rating_var.set(float(scores_data['initial_rating']))
+            
+            # 更新ELO系统参数
+            self.update_parameters()
             
             # 加载分数
             loaded_count = 0
