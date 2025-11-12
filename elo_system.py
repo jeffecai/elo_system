@@ -383,7 +383,7 @@ class ELOSystemGUI:
         
         # 参数文件路径
         self.config_file = "elo_config.json"
-        self.scores_file = "elo_scores.json"
+        self.scores_file = None  # 将根据图像目录动态设置
         
         # 创建界面
         self.create_widgets()
@@ -534,6 +534,9 @@ class ELOSystemGUI:
                     # 添加到ELO系统
                     self.elo_system.add_image(str(file_path))
             
+            # 设置分数文件路径为图像目录
+            self.scores_file = os.path.join(directory, "elo_scores.json")
+            
             # 更新列表显示
             self.update_image_list()
             self.update_info()
@@ -619,7 +622,15 @@ class ELOSystemGUI:
             messagebox.showwarning("警告", "没有图像数据可保存")
             return
         
+        if not self.current_directory:
+            messagebox.showwarning("警告", "请先选择图像目录")
+            return
+        
         try:
+            # 确保分数文件路径已设置
+            if not self.scores_file:
+                self.scores_file = os.path.join(self.current_directory, "elo_scores.json")
+            
             scores_data = {
                 'directory': self.current_directory,
                 'scores': {}
@@ -628,12 +639,12 @@ class ELOSystemGUI:
                 scores_data['scores'][img_path] = float(self.elo_system.get_rating(img_path))
             
             # 确保目录存在
-            os.makedirs(os.path.dirname(os.path.abspath(self.scores_file)) or '.', exist_ok=True)
+            os.makedirs(os.path.dirname(self.scores_file) or '.', exist_ok=True)
             
             with open(self.scores_file, 'w', encoding='utf-8') as f:
                 json.dump(scores_data, f, indent=2, ensure_ascii=False)
             
-            messagebox.showinfo("成功", f"分数已保存到 {os.path.abspath(self.scores_file)}")
+            messagebox.showinfo("成功", f"分数已保存到 {self.scores_file}")
         except Exception as e:
             import traceback
             error_msg = f"保存分数失败: {str(e)}\n{traceback.format_exc()}"
@@ -641,7 +652,15 @@ class ELOSystemGUI:
     
     def load_scores(self):
         """从JSON文件加载分数"""
+        if not self.current_directory:
+            messagebox.showwarning("警告", "请先选择图像目录")
+            return
+        
         try:
+            # 确定分数文件路径
+            if not self.scores_file:
+                self.scores_file = os.path.join(self.current_directory, "elo_scores.json")
+            
             if not os.path.exists(self.scores_file):
                 messagebox.showwarning("警告", f"文件 {self.scores_file} 不存在")
                 return
