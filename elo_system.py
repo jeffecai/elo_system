@@ -241,10 +241,10 @@ class MatchWindow:
         self.right_canvas = tk.Canvas(self.right_frame, bg='white')
         self.right_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         
-        # 创建覆盖层canvas（用于显示左图覆盖右图）
+        # 创建覆盖层canvas（用于显示左图覆盖右图），使用place布局覆盖在右侧canvas上
         self.overlay_canvas = tk.Canvas(self.right_frame, bg='white', highlightthickness=0)
-        self.overlay_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
-        self.overlay_canvas.lower()  # 放在底层，默认隐藏
+        # 初始时隐藏覆盖层
+        self.overlay_canvas.place_forget()
         
         self.right_button = tk.Button(self.right_frame, text="选择这个", 
                                       font=("Arial", 16), bg='#4CAF50', fg='white',
@@ -303,9 +303,16 @@ class MatchWindow:
     
     def on_overlay_key_press(self, event):
         """按下空格键时显示覆盖"""
-        if not self.is_overlaying and self.overlay_canvas and self.left_photo:
+        if not self.is_overlaying and self.overlay_canvas and self.left_photo and self.right_canvas:
             self.is_overlaying = True
-            self.overlay_canvas.lift()  # 提升覆盖层到顶层
+            # 获取右侧canvas的位置和大小
+            self.right_canvas.update_idletasks()
+            x = self.right_canvas.winfo_x()
+            y = self.right_canvas.winfo_y()
+            width = self.right_canvas.winfo_width()
+            height = self.right_canvas.winfo_height()
+            # 使用place布局覆盖在右侧canvas上
+            self.overlay_canvas.place(x=x, y=y, width=width, height=height)
             # 确保覆盖层大小正确
             self.window.after(10, self.update_overlay_size)
     
@@ -313,23 +320,28 @@ class MatchWindow:
         """松开空格键时隐藏覆盖"""
         if self.is_overlaying and self.overlay_canvas:
             self.is_overlaying = False
-            self.overlay_canvas.lower()  # 降低覆盖层到底层
+            self.overlay_canvas.place_forget()  # 隐藏覆盖层
     
     def update_overlay_size(self):
         """更新覆盖层大小"""
-        if not self.current_pair or not self.overlay_canvas:
+        if not self.current_pair or not self.overlay_canvas or not self.right_canvas:
             return
         
         try:
-            self.overlay_canvas.update_idletasks()
-            overlay_width = self.overlay_canvas.winfo_width()
-            overlay_height = self.overlay_canvas.winfo_height()
+            # 获取右侧canvas的位置和大小
+            self.right_canvas.update_idletasks()
+            x = self.right_canvas.winfo_x()
+            y = self.right_canvas.winfo_y()
+            width = self.right_canvas.winfo_width()
+            height = self.right_canvas.winfo_height()
             
-            if overlay_width > 1 and overlay_height > 1:
+            if width > 1 and height > 1:
+                # 更新覆盖层位置和大小
+                self.overlay_canvas.place(x=x, y=y, width=width, height=height)
                 # 重新准备覆盖图像
                 left_path = self.current_pair[0]
                 img = Image.open(left_path)
-                self.prepare_overlay_image(img, overlay_width, overlay_height)
+                self.prepare_overlay_image(img, width, height)
         except:
             pass
     
@@ -350,7 +362,7 @@ class MatchWindow:
         # 隐藏覆盖层（如果正在显示）
         if self.is_overlaying and self.overlay_canvas:
             self.is_overlaying = False
-            self.overlay_canvas.lower()
+            self.overlay_canvas.place_forget()
         
         # 随机选择两张不同的图像
         self.current_pair = random.sample(self.image_list, 2)
