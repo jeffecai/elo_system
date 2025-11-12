@@ -11,11 +11,11 @@ from pathlib import Path
 class ELOSystem:
     """ELO评分系统核心类"""
     
-    def __init__(self, k_factor=32, initial_rating=1500):
+    def __init__(self, k_factor=16, initial_rating=1400):
         """
         初始化ELO系统
-        :param k_factor: K因子，影响评分变化幅度
-        :param initial_rating: 初始评分
+        :param k_factor: K因子，影响评分变化幅度（论文设定值：16）
+        :param initial_rating: 初始评分（论文设定值：1400）
         """
         self.k_factor = k_factor
         self.initial_rating = initial_rating
@@ -42,6 +42,23 @@ class ELOSystem:
         # 更新分数
         self.ratings[winner_path] = winner_rating + self.k_factor * (1 - expected_winner)
         self.ratings[loser_path] = loser_rating + self.k_factor * (0 - expected_loser)
+    
+    def update_ratings_draw(self, path_a, path_b):
+        """
+        根据平局结果更新ELO分数（S_A = S_B = 0.5）
+        :param path_a: 图像A路径
+        :param path_b: 图像B路径
+        """
+        rating_a = self.ratings.get(path_a, self.initial_rating)
+        rating_b = self.ratings.get(path_b, self.initial_rating)
+        
+        # 计算期望得分
+        expected_a = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
+        expected_b = 1 / (1 + 10 ** ((rating_a - rating_b) / 400))
+        
+        # 平局时 S_A = S_B = 0.5，对称更新
+        self.ratings[path_a] = rating_a + self.k_factor * (0.5 - expected_a)
+        self.ratings[path_b] = rating_b + self.k_factor * (0.5 - expected_b)
     
     def get_rating(self, image_path):
         """获取图像的ELO分数"""
@@ -161,7 +178,7 @@ class MatchWindow:
     def create_widgets(self):
         """创建界面组件"""
         # 标题
-        title_label = tk.Label(self.window, text="选择你更喜欢的图像", 
+        title_label = tk.Label(self.window, text="选择你更喜欢的图像（或选择平局）", 
                               font=("Arial", 20, "bold"))
         title_label.pack(pady=20)
         
@@ -199,10 +216,20 @@ class MatchWindow:
                                       command=lambda: self.select_winner(1))
         self.right_button.pack(pady=10)
         
+        # 按钮区域（平局和跳过）
+        button_area = tk.Frame(self.window)
+        button_area.pack(pady=20)
+        
+        # 平局按钮
+        draw_button = tk.Button(button_area, text="平局（两者一样好）", 
+                                font=("Arial", 14), bg='#FF9800', fg='white',
+                                command=self.select_draw, width=20)
+        draw_button.pack(side=tk.LEFT, padx=10)
+        
         # 跳过按钮
-        skip_button = tk.Button(self.window, text="跳过这一对", 
+        skip_button = tk.Button(button_area, text="跳过这一对", 
                                 font=("Arial", 12), command=self.next_match)
-        skip_button.pack(pady=10)
+        skip_button.pack(side=tk.LEFT, padx=10)
     
     def on_window_resize(self):
         """窗口大小变化时重新显示图像"""
@@ -306,6 +333,33 @@ class MatchWindow:
         # 延迟开始下一场匹配，让用户看到分数更新
         self.window.after(300, self.next_match)
     
+    def select_draw(self):
+        """选择平局并更新ELO分数"""
+        if self.current_pair is None:
+            return
+        
+        path_a = self.current_pair[0]
+        path_b = self.current_pair[1]
+        
+        # 更新ELO分数（平局：S_A = S_B = 0.5）
+        self.elo_system.update_ratings_draw(path_a, path_b)
+        
+        # 更新主界面
+        if self.update_callback:
+            self.update_callback()
+        
+        # 更新当前显示的分数（实时更新）
+        filename_a = os.path.basename(path_a)
+        filename_b = os.path.basename(path_b)
+        rating_a = self.elo_system.get_rating(path_a)
+        rating_b = self.elo_system.get_rating(path_b)
+        
+        self.left_label.config(text=f"{filename_a}\nELO分数: {rating_a:.1f}")
+        self.right_label.config(text=f"{filename_b}\nELO分数: {rating_b:.1f}")
+        
+        # 延迟开始下一场匹配，让用户看到分数更新
+        self.window.after(300, self.next_match)
+    
     def on_closing(self):
         """窗口关闭事件"""
         self.window.destroy()
@@ -324,6 +378,7 @@ class ELOSystemGUI:
         
         # 图像列表
         self.image_list = []
+        self.sorted_image_list = []  # 排序后的图像列表，用于显示
         self.current_directory = ""
         
         # 参数文件路径
@@ -343,27 +398,49 @@ class ELOSystemGUI:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # 左侧面板 - 图像列表
-        left_panel = tk.Frame(main_frame, width=400)
+        left_panel = tk.Frame(main_frame, width=600)
         left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 10))
         left_panel.pack_propagate(False)
         
         # 图像列表标题
-        list_title = tk.Label(left_panel, text="图像列表", font=("Arial", 14, "bold"))
+        list_title = tk.Label(left_panel, text="图像列表（按ELO分数从高到低排序）", font=("Arial", 14, "bold"))
         list_title.pack(pady=10)
         
-        # 图像列表和滚动条
+        # 图像列表和滚动条容器
         list_frame = tk.Frame(left_panel)
         list_frame.pack(fill=tk.BOTH, expand=True)
         
-        scrollbar = tk.Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # 使用grid布局来避免滚动条重叠
+        # 创建内部容器
+        inner_frame = tk.Frame(list_frame)
+        inner_frame.grid(row=0, column=0, sticky="nsew")
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
         
-        self.image_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
-                                        font=("Arial", 10), width=50)
-        self.image_listbox.pack(fill=tk.BOTH, expand=True)
+        # 纵向滚动条
+        v_scrollbar = tk.Scrollbar(inner_frame, orient=tk.VERTICAL)
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        # 横向滚动条
+        h_scrollbar = tk.Scrollbar(inner_frame, orient=tk.HORIZONTAL)
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        # 图像列表
+        self.image_listbox = tk.Listbox(inner_frame, 
+                                       yscrollcommand=v_scrollbar.set,
+                                       xscrollcommand=h_scrollbar.set,
+                                       font=("Arial", 10), 
+                                       width=70)
+        self.image_listbox.grid(row=0, column=0, sticky="nsew")
         self.image_listbox.bind('<Double-Button-1>', self.on_image_select)
         
-        scrollbar.config(command=self.image_listbox.yview)
+        # 配置grid权重
+        inner_frame.grid_rowconfigure(0, weight=1)
+        inner_frame.grid_columnconfigure(0, weight=1)
+        
+        # 配置滚动条
+        v_scrollbar.config(command=self.image_listbox.yview)
+        h_scrollbar.config(command=self.image_listbox.xview)
         
         # 右侧面板 - 参数设置和操作
         right_panel = tk.Frame(main_frame)
@@ -399,7 +476,7 @@ class ELOSystemGUI:
         k_frame.pack(fill=tk.X, pady=10)
         tk.Label(k_frame, text="K因子（影响评分变化幅度）:", 
                 font=("Arial", 11)).pack(side=tk.LEFT, padx=10)
-        self.k_factor_var = tk.DoubleVar(value=32.0)
+        self.k_factor_var = tk.DoubleVar(value=16.0)
         k_spinbox = tk.Spinbox(k_frame, from_=1, to=100, textvariable=self.k_factor_var,
                               width=10, font=("Arial", 11))
         k_spinbox.pack(side=tk.LEFT, padx=10)
@@ -410,7 +487,7 @@ class ELOSystemGUI:
         init_frame.pack(fill=tk.X, pady=10)
         tk.Label(init_frame, text="初始评分:", 
                 font=("Arial", 11)).pack(side=tk.LEFT, padx=10)
-        self.initial_rating_var = tk.DoubleVar(value=1500.0)
+        self.initial_rating_var = tk.DoubleVar(value=1400.0)
         init_spinbox = tk.Spinbox(init_frame, from_=0, to=10000, 
                                  textvariable=self.initial_rating_var,
                                  width=10, font=("Arial", 11))
@@ -466,9 +543,15 @@ class ELOSystemGUI:
             messagebox.showerror("错误", f"加载图像时出错: {str(e)}")
     
     def update_image_list(self):
-        """更新图像列表显示"""
+        """更新图像列表显示，按ELO分数从高到低排序"""
         self.image_listbox.delete(0, tk.END)
-        for img_path in self.image_list:
+        
+        # 按ELO分数从高到低排序
+        self.sorted_image_list = sorted(self.image_list, 
+                                       key=lambda x: self.elo_system.get_rating(x), 
+                                       reverse=True)
+        
+        for img_path in self.sorted_image_list:
             filename = os.path.basename(img_path)
             # 获取相对目录路径
             if self.current_directory:
@@ -485,20 +568,18 @@ class ELOSystemGUI:
                 dir_display = os.path.dirname(img_path)
             
             rating = self.elo_system.get_rating(img_path)
-            # 截断过长的路径，确保显示完整
-            max_len = 80
-            if len(dir_display) + len(filename) > max_len:
-                filename = filename[:max_len - len(dir_display) - 10] + "..."
+            # 格式化显示文本，确保完整显示
             display_text = f"{dir_display} {filename} | ELO: {rating:.1f}"
             self.image_listbox.insert(tk.END, display_text)
     
     def on_image_select(self, event):
         """双击图像名称时查看详情"""
         selection = self.image_listbox.curselection()
-        if selection:
+        if selection and self.sorted_image_list:
             idx = selection[0]
-            image_path = self.image_list[idx]
-            ImageViewerWindow(self.root, image_path)
+            if idx < len(self.sorted_image_list):
+                image_path = self.sorted_image_list[idx]
+                ImageViewerWindow(self.root, image_path)
     
     def update_parameters(self):
         """更新ELO参数"""
@@ -526,8 +607,8 @@ class ELOSystemGUI:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                self.k_factor_var.set(config.get('k_factor', 32.0))
-                self.initial_rating_var.set(config.get('initial_rating', 1500.0))
+                self.k_factor_var.set(config.get('k_factor', 16.0))
+                self.initial_rating_var.set(config.get('initial_rating', 1400.0))
                 self.update_parameters()
         except Exception as e:
             messagebox.showwarning("警告", f"加载配置失败: {str(e)}")
