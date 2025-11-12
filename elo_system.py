@@ -151,7 +151,7 @@ class ImageViewerWindow:
 class MatchWindow:
     """匹配界面窗口"""
     
-    def __init__(self, parent, elo_system, image_list, update_callback):
+    def __init__(self, parent, elo_system, image_list, update_callback, gui_instance):
         self.window = tk.Toplevel(parent)
         self.window.title("图像匹配")
         self.window.geometry("1200x800")
@@ -159,6 +159,7 @@ class MatchWindow:
         self.elo_system = elo_system
         self.image_list = image_list
         self.update_callback = update_callback
+        self.gui_instance = gui_instance  # 主界面实例，用于更新比较计数
         
         # 当前匹配的图像对
         self.current_pair = None
@@ -313,6 +314,10 @@ class MatchWindow:
         # 更新ELO分数
         self.elo_system.update_ratings(winner_path, loser_path)
         
+        # 增加比较计数
+        if self.gui_instance:
+            self.gui_instance.comparison_count += 1
+        
         # 更新主界面
         if self.update_callback:
             self.update_callback()
@@ -343,6 +348,10 @@ class MatchWindow:
         
         # 更新ELO分数（平局：S_A = S_B = 0.5）
         self.elo_system.update_ratings_draw(path_a, path_b)
+        
+        # 增加比较计数
+        if self.gui_instance:
+            self.gui_instance.comparison_count += 1
         
         # 更新主界面
         if self.update_callback:
@@ -380,6 +389,9 @@ class ELOSystemGUI:
         self.image_list = []
         self.sorted_image_list = []  # 排序后的图像列表，用于显示
         self.current_directory = ""
+        
+        # 比较计数
+        self.comparison_count = 0  # 已标记的对数
         
         # 参数文件路径
         self.config_file = "elo_config.json"
@@ -498,19 +510,19 @@ class ELOSystemGUI:
         tk.Button(params_frame, text="保存参数", font=("Arial", 11),
                  command=self.save_config, bg='#607D8B', fg='white').pack(pady=10)
         
-        # 信息显示区域
+        # 信息显示区域（小框）
         info_frame = tk.LabelFrame(right_panel, text="系统信息", 
-                                  font=("Arial", 12, "bold"), padx=20, pady=20)
-        info_frame.pack(fill=tk.BOTH, expand=True)
+                                  font=("Arial", 12, "bold"), padx=10, pady=10)
+        info_frame.pack(fill=tk.X, pady=10)
         
-        self.info_text = tk.Text(info_frame, wrap=tk.WORD, font=("Arial", 10),
-                                height=15)
-        self.info_text.pack(fill=tk.BOTH, expand=True)
+        self.info_text = tk.Text(info_frame, wrap=tk.WORD, font=("Arial", 9),
+                                height=8, width=50)
+        self.info_text.pack(fill=tk.X)
         
-        scrollbar_info = tk.Scrollbar(self.info_text)
-        scrollbar_info.pack(side=tk.RIGHT, fill=tk.Y)
-        self.info_text.config(yscrollcommand=scrollbar_info.set)
-        scrollbar_info.config(command=self.info_text.yview)
+        scrollbar_info = tk.Scrollbar(info_frame, orient=tk.HORIZONTAL)
+        scrollbar_info.pack(side=tk.BOTTOM, fill=tk.X)
+        self.info_text.config(xscrollcommand=scrollbar_info.set)
+        scrollbar_info.config(command=self.info_text.xview)
         
         self.update_info()
     
@@ -536,6 +548,24 @@ class ELOSystemGUI:
             
             # 设置分数文件路径为图像目录
             self.scores_file = os.path.join(directory, "elo_scores.json")
+            
+            # 尝试自动加载已有的分数文件（如果存在）
+            if os.path.exists(self.scores_file):
+                try:
+                    with open(self.scores_file, 'r', encoding='utf-8') as f:
+                        scores_data = json.load(f)
+                    if 'comparison_count' in scores_data:
+                        self.comparison_count = int(scores_data['comparison_count'])
+                    if 'scores' in scores_data:
+                        for img_path, score in scores_data['scores'].items():
+                            if os.path.exists(img_path) and img_path in self.image_list:
+                                self.elo_system.ratings[img_path] = float(score)
+                except:
+                    # 如果加载失败，重置计数
+                    self.comparison_count = 0
+            else:
+                # 如果没有分数文件，重置计数
+                self.comparison_count = 0
             
             # 更新列表显示
             self.update_image_list()
@@ -633,6 +663,7 @@ class ELOSystemGUI:
             
             scores_data = {
                 'directory': self.current_directory,
+                'comparison_count': self.comparison_count,
                 'scores': {}
             }
             for img_path in self.image_list:
@@ -673,6 +704,12 @@ class ELOSystemGUI:
                 messagebox.showerror("错误", "JSON文件格式不正确：缺少'scores'字段")
                 return
             
+            # 加载比较计数
+            if 'comparison_count' in scores_data:
+                self.comparison_count = int(scores_data['comparison_count'])
+            else:
+                self.comparison_count = 0
+            
             # 加载分数
             loaded_count = 0
             for img_path, score in scores_data['scores'].items():
@@ -684,7 +721,7 @@ class ELOSystemGUI:
             self.update_image_list()
             self.update_info()
             
-            messagebox.showinfo("成功", f"已加载 {loaded_count} 个图像的分数")
+            messagebox.showinfo("成功", f"已加载 {loaded_count} 个图像的分数，已标记 {self.comparison_count} 对")
         except json.JSONDecodeError:
             messagebox.showerror("错误", "JSON文件格式错误，无法解析")
         except Exception as e:
@@ -697,13 +734,15 @@ class ELOSystemGUI:
             return
         
         MatchWindow(self.root, self.elo_system, self.image_list, 
-                   lambda: self.update_image_list())
+                   lambda: (self.update_image_list(), self.update_info()),
+                   self)
     
     def update_info(self):
         """更新信息显示"""
         self.info_text.delete(1.0, tk.END)
         info = f"当前目录: {self.current_directory if self.current_directory else '未选择'}\n"
         info += f"图像数量: {len(self.image_list)}\n"
+        info += f"已标记对数: {self.comparison_count}\n"
         info += f"K因子: {self.k_factor_var.get()}\n"
         info += f"初始评分: {self.initial_rating_var.get()}\n\n"
         
