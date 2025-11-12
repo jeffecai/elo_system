@@ -164,11 +164,21 @@ class MatchWindow:
         # 当前匹配的图像对
         self.current_pair = None
         
+        # 覆盖功能相关
+        self.overlay_canvas = None  # 覆盖层canvas
+        self.left_photo = None  # 左图的photo引用
+        self.is_overlaying = False  # 是否正在覆盖
+        
         # 创建界面
         self.create_widgets()
         
         # 绑定窗口大小变化事件
         self.window.bind('<Configure>', lambda e: self.on_window_resize())
+        
+        # 绑定键盘事件（空格键覆盖功能）
+        self.window.bind('<KeyPress-space>', self.on_overlay_key_press)
+        self.window.bind('<KeyRelease-space>', self.on_overlay_key_release)
+        self.window.focus_set()  # 确保窗口可以接收键盘事件
         
         # 延迟开始第一次匹配，确保窗口已完全初始化
         self.window.after(200, self.next_match)
@@ -181,7 +191,12 @@ class MatchWindow:
         # 标题
         title_label = tk.Label(self.window, text="选择你更喜欢的图像（或选择平局）", 
                               font=("Arial", 20, "bold"))
-        title_label.pack(pady=20)
+        title_label.pack(pady=10)
+        
+        # 提示信息
+        hint_label = tk.Label(self.window, text="💡 提示：按住空格键可以让左图覆盖右图，方便比对", 
+                             font=("Arial", 11), fg='gray')
+        hint_label.pack(pady=5)
         
         # 图像显示区域
         image_frame = tk.Frame(self.window)
@@ -226,6 +241,11 @@ class MatchWindow:
         self.right_canvas = tk.Canvas(self.right_frame, bg='white')
         self.right_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         
+        # 创建覆盖层canvas（用于显示左图覆盖右图）
+        self.overlay_canvas = tk.Canvas(self.right_frame, bg='white', highlightthickness=0)
+        self.overlay_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self.overlay_canvas.lower()  # 放在底层，默认隐藏
+        
         self.right_button = tk.Button(self.right_frame, text="选择这个", 
                                       font=("Arial", 16), bg='#4CAF50', fg='white',
                                       command=lambda: self.select_winner(1))
@@ -246,16 +266,91 @@ class MatchWindow:
                                 font=("Arial", 12), command=self.next_match)
         skip_button.pack(side=tk.LEFT, padx=10)
     
+    def prepare_overlay_image(self, left_img, canvas_width, canvas_height):
+        """准备覆盖层图像"""
+        if not self.overlay_canvas or not left_img:
+            return
+        
+        try:
+            self.overlay_canvas.update_idletasks()
+            overlay_width = self.overlay_canvas.winfo_width()
+            overlay_height = self.overlay_canvas.winfo_height()
+            
+            if overlay_width <= 1 or overlay_height <= 1:
+                return
+            
+            # 使用相同的缩放逻辑
+            margin = 20
+            available_width = overlay_width - margin
+            available_height = overlay_height - margin
+            
+            img_width, img_height = left_img.size
+            scale_w = available_width / img_width
+            scale_h = available_height / img_height
+            scale = min(scale_w, scale_h)
+            
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+            resized_overlay = left_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            overlay_photo = ImageTk.PhotoImage(resized_overlay)
+            self.overlay_canvas.delete("all")
+            self.overlay_canvas.image = overlay_photo  # 保持引用
+            self.overlay_canvas.create_image(overlay_width // 2, overlay_height // 2,
+                                            image=overlay_photo, anchor=tk.CENTER)
+        except Exception as e:
+            pass  # 忽略覆盖层准备错误
+    
+    def on_overlay_key_press(self, event):
+        """按下空格键时显示覆盖"""
+        if not self.is_overlaying and self.overlay_canvas and self.left_photo:
+            self.is_overlaying = True
+            self.overlay_canvas.lift()  # 提升覆盖层到顶层
+            # 确保覆盖层大小正确
+            self.window.after(10, self.update_overlay_size)
+    
+    def on_overlay_key_release(self, event):
+        """松开空格键时隐藏覆盖"""
+        if self.is_overlaying and self.overlay_canvas:
+            self.is_overlaying = False
+            self.overlay_canvas.lower()  # 降低覆盖层到底层
+    
+    def update_overlay_size(self):
+        """更新覆盖层大小"""
+        if not self.current_pair or not self.overlay_canvas:
+            return
+        
+        try:
+            self.overlay_canvas.update_idletasks()
+            overlay_width = self.overlay_canvas.winfo_width()
+            overlay_height = self.overlay_canvas.winfo_height()
+            
+            if overlay_width > 1 and overlay_height > 1:
+                # 重新准备覆盖图像
+                left_path = self.current_pair[0]
+                img = Image.open(left_path)
+                self.prepare_overlay_image(img, overlay_width, overlay_height)
+        except:
+            pass
+    
     def on_window_resize(self):
         """窗口大小变化时重新显示图像"""
         if self.current_pair:
             self.display_images()
+            # 如果正在覆盖，更新覆盖层
+            if self.is_overlaying:
+                self.window.after(50, self.update_overlay_size)
     
     def next_match(self):
         """开始下一场匹配"""
         if len(self.image_list) < 2:
             messagebox.showwarning("警告", "至少需要2张图像才能进行匹配")
             return
+        
+        # 隐藏覆盖层（如果正在显示）
+        if self.is_overlaying and self.overlay_canvas:
+            self.is_overlaying = False
+            self.overlay_canvas.lower()
         
         # 随机选择两张不同的图像
         self.current_pair = random.sample(self.image_list, 2)
@@ -306,6 +401,12 @@ class MatchWindow:
                 # 居中显示图像
                 canvas.create_image(canvas_width // 2, canvas_height // 2, 
                                    image=photo, anchor=tk.CENTER)
+                
+                # 如果是左图，保存photo引用用于覆盖功能
+                if idx == 0:
+                    self.left_photo = photo
+                    # 同时准备覆盖层的图像（使用原始图像对象）
+                    self.prepare_overlay_image(img, canvas_width, canvas_height)
                 
                 # 更新标签显示文件名和当前分数
                 filename = os.path.basename(path)
