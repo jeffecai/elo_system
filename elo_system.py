@@ -80,14 +80,15 @@ class ImageViewerWindow:
         self.canvas = tk.Canvas(self.window, bg='black')
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
-        # 加载并显示图像
-        self.load_image(image_path)
-        
-        # 绑定窗口大小变化事件
-        self.window.bind('<Configure>', lambda e: self.resize_image())
         self.image_path = image_path
         self.original_image = None
         self.photo = None
+        
+        # 绑定窗口大小变化事件
+        self.window.bind('<Configure>', lambda e: self.resize_image())
+        
+        # 延迟加载图像，确保窗口已完全初始化
+        self.window.after(100, self.load_image, image_path)
     
     def load_image(self, image_path):
         """加载图像"""
@@ -97,7 +98,7 @@ class ImageViewerWindow:
         except Exception as e:
             messagebox.showerror("错误", f"无法加载图像: {str(e)}")
     
-    def resize_image(self):
+    def resize_image(self, event=None):
         """调整图像大小以适应窗口"""
         if self.original_image is None:
             return
@@ -108,6 +109,8 @@ class ImageViewerWindow:
         canvas_height = self.canvas.winfo_height()
         
         if canvas_width <= 1 or canvas_height <= 1:
+            # 如果窗口还没准备好，延迟重试
+            self.window.after(50, self.resize_image)
             return
         
         # 计算缩放比例
@@ -146,8 +149,11 @@ class MatchWindow:
         # 创建界面
         self.create_widgets()
         
-        # 开始第一次匹配
-        self.next_match()
+        # 绑定窗口大小变化事件
+        self.window.bind('<Configure>', lambda e: self.on_window_resize())
+        
+        # 延迟开始第一次匹配，确保窗口已完全初始化
+        self.window.after(200, self.next_match)
         
         # 绑定关闭事件
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -198,6 +204,11 @@ class MatchWindow:
                                 font=("Arial", 12), command=self.next_match)
         skip_button.pack(pady=10)
     
+    def on_window_resize(self):
+        """窗口大小变化时重新显示图像"""
+        if self.current_pair:
+            self.display_images()
+    
     def next_match(self):
         """开始下一场匹配"""
         if len(self.image_list) < 2:
@@ -209,21 +220,50 @@ class MatchWindow:
         self.display_images()
     
     def display_images(self):
-        """显示当前匹配的图像对"""
+        """显示当前匹配的图像对，自适应布满整个框架"""
+        if not self.current_pair:
+            return
+        
         for idx, (canvas, path) in enumerate([(self.left_canvas, self.current_pair[0]),
                                                (self.right_canvas, self.current_pair[1])]):
             try:
-                img = Image.open(path)
-                img.thumbnail((400, 400), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                
-                canvas.delete("all")
-                canvas.image = photo  # 保持引用
+                # 确保canvas已更新
+                canvas.update_idletasks()
                 canvas_width = canvas.winfo_width()
                 canvas_height = canvas.winfo_height()
-                if canvas_width > 1 and canvas_height > 1:
-                    canvas.create_image(canvas_width // 2, canvas_height // 2, 
-                                       image=photo, anchor=tk.CENTER)
+                
+                # 如果canvas还没准备好，延迟重试
+                if canvas_width <= 1 or canvas_height <= 1:
+                    self.window.after(50, self.display_images)
+                    return
+                
+                # 加载原始图像
+                img = Image.open(path)
+                img_width, img_height = img.size
+                
+                # 计算缩放比例以适应canvas，留出一些边距
+                margin = 20
+                available_width = canvas_width - margin
+                available_height = canvas_height - margin
+                
+                scale_w = available_width / img_width
+                scale_h = available_height / img_height
+                scale = min(scale_w, scale_h)
+                
+                # 缩放图像
+                new_width = int(img_width * scale)
+                new_height = int(img_height * scale)
+                resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # 转换为PhotoImage
+                photo = ImageTk.PhotoImage(resized_img)
+                
+                canvas.delete("all")
+                canvas.image = photo  # 保持引用，防止被垃圾回收
+                
+                # 居中显示图像
+                canvas.create_image(canvas_width // 2, canvas_height // 2, 
+                                   image=photo, anchor=tk.CENTER)
                 
                 # 更新标签显示文件名和当前分数
                 filename = os.path.basename(path)
@@ -250,8 +290,21 @@ class MatchWindow:
         if self.update_callback:
             self.update_callback()
         
-        # 开始下一场匹配
-        self.next_match()
+        # 更新当前显示的分数（实时更新）
+        filename_winner = os.path.basename(winner_path)
+        filename_loser = os.path.basename(loser_path)
+        rating_winner = self.elo_system.get_rating(winner_path)
+        rating_loser = self.elo_system.get_rating(loser_path)
+        
+        if winner_idx == 0:
+            self.left_label.config(text=f"{filename_winner}\nELO分数: {rating_winner:.1f}")
+            self.right_label.config(text=f"{filename_loser}\nELO分数: {rating_loser:.1f}")
+        else:
+            self.left_label.config(text=f"{filename_loser}\nELO分数: {rating_loser:.1f}")
+            self.right_label.config(text=f"{filename_winner}\nELO分数: {rating_winner:.1f}")
+        
+        # 延迟开始下一场匹配，让用户看到分数更新
+        self.window.after(300, self.next_match)
     
     def on_closing(self):
         """窗口关闭事件"""
@@ -306,7 +359,7 @@ class ELOSystemGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.image_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
-                                        font=("Arial", 10))
+                                        font=("Arial", 10), width=50)
         self.image_listbox.pack(fill=tk.BOTH, expand=True)
         self.image_listbox.bind('<Double-Button-1>', self.on_image_select)
         
@@ -432,6 +485,10 @@ class ELOSystemGUI:
                 dir_display = os.path.dirname(img_path)
             
             rating = self.elo_system.get_rating(img_path)
+            # 截断过长的路径，确保显示完整
+            max_len = 80
+            if len(dir_display) + len(filename) > max_len:
+                filename = filename[:max_len - len(dir_display) - 10] + "..."
             display_text = f"{dir_display} {filename} | ELO: {rating:.1f}"
             self.image_listbox.insert(tk.END, display_text)
     
@@ -477,20 +534,29 @@ class ELOSystemGUI:
     
     def save_scores(self):
         """保存分数到JSON文件"""
+        if not self.image_list:
+            messagebox.showwarning("警告", "没有图像数据可保存")
+            return
+        
         try:
             scores_data = {
                 'directory': self.current_directory,
                 'scores': {}
             }
             for img_path in self.image_list:
-                scores_data['scores'][img_path] = self.elo_system.get_rating(img_path)
+                scores_data['scores'][img_path] = float(self.elo_system.get_rating(img_path))
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(os.path.abspath(self.scores_file)) or '.', exist_ok=True)
             
             with open(self.scores_file, 'w', encoding='utf-8') as f:
                 json.dump(scores_data, f, indent=2, ensure_ascii=False)
             
-            messagebox.showinfo("成功", f"分数已保存到 {self.scores_file}")
+            messagebox.showinfo("成功", f"分数已保存到 {os.path.abspath(self.scores_file)}")
         except Exception as e:
-            messagebox.showerror("错误", f"保存分数失败: {str(e)}")
+            import traceback
+            error_msg = f"保存分数失败: {str(e)}\n{traceback.format_exc()}"
+            messagebox.showerror("错误", error_msg)
     
     def load_scores(self):
         """从JSON文件加载分数"""
