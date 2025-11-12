@@ -242,6 +242,7 @@ class MatchWindow:
         self.right_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         
         # 创建覆盖层canvas（用于显示左图覆盖右图），使用place布局覆盖在右侧canvas上
+        # 使用in_参数指定父widget为right_frame，确保坐标系统一致
         self.overlay_canvas = tk.Canvas(self.right_frame, bg='white', highlightthickness=0)
         # 初始时隐藏覆盖层
         self.overlay_canvas.place_forget()
@@ -267,19 +268,19 @@ class MatchWindow:
         skip_button.pack(side=tk.LEFT, padx=10)
     
     def prepare_overlay_image(self, left_img, canvas_width, canvas_height):
-        """准备覆盖层图像"""
+        """准备覆盖层图像，使用与右侧canvas相同的缩放和位置逻辑"""
         if not self.overlay_canvas or not left_img:
             return
         
         try:
-            self.overlay_canvas.update_idletasks()
-            overlay_width = self.overlay_canvas.winfo_width()
-            overlay_height = self.overlay_canvas.winfo_height()
+            # 使用传入的canvas尺寸（应该与右侧canvas相同）
+            overlay_width = canvas_width
+            overlay_height = canvas_height
             
             if overlay_width <= 1 or overlay_height <= 1:
                 return
             
-            # 使用相同的缩放逻辑
+            # 使用与右侧canvas完全相同的缩放逻辑
             margin = 20
             available_width = overlay_width - margin
             available_height = overlay_height - margin
@@ -296,6 +297,7 @@ class MatchWindow:
             overlay_photo = ImageTk.PhotoImage(resized_overlay)
             self.overlay_canvas.delete("all")
             self.overlay_canvas.image = overlay_photo  # 保持引用
+            # 使用与右侧canvas完全相同的位置（居中显示）
             self.overlay_canvas.create_image(overlay_width // 2, overlay_height // 2,
                                             image=overlay_photo, anchor=tk.CENTER)
         except Exception as e:
@@ -305,14 +307,17 @@ class MatchWindow:
         """按下空格键时显示覆盖"""
         if not self.is_overlaying and self.overlay_canvas and self.left_photo and self.right_canvas:
             self.is_overlaying = True
-            # 获取右侧canvas的位置和大小
+            # 确保布局更新完成
+            self.right_frame.update_idletasks()
+            # 获取右侧canvas相对于right_frame的位置和大小
             self.right_canvas.update_idletasks()
+            # 使用winfo_x和winfo_y获取相对于父窗口的位置
             x = self.right_canvas.winfo_x()
             y = self.right_canvas.winfo_y()
             width = self.right_canvas.winfo_width()
             height = self.right_canvas.winfo_height()
-            # 使用place布局覆盖在右侧canvas上
-            self.overlay_canvas.place(x=x, y=y, width=width, height=height)
+            # 使用place布局覆盖在右侧canvas上，in_参数指定父widget
+            self.overlay_canvas.place(in_=self.right_frame, x=x, y=y, width=width, height=height)
             # 确保覆盖层大小正确
             self.window.after(10, self.update_overlay_size)
     
@@ -328,7 +333,9 @@ class MatchWindow:
             return
         
         try:
-            # 获取右侧canvas的位置和大小
+            # 确保布局更新完成
+            self.right_frame.update_idletasks()
+            # 获取右侧canvas相对于right_frame的位置和大小
             self.right_canvas.update_idletasks()
             x = self.right_canvas.winfo_x()
             y = self.right_canvas.winfo_y()
@@ -336,8 +343,8 @@ class MatchWindow:
             height = self.right_canvas.winfo_height()
             
             if width > 1 and height > 1:
-                # 更新覆盖层位置和大小
-                self.overlay_canvas.place(x=x, y=y, width=width, height=height)
+                # 更新覆盖层位置和大小，使用in_参数确保坐标系统一致
+                self.overlay_canvas.place(in_=self.right_frame, x=x, y=y, width=width, height=height)
                 # 重新准备覆盖图像
                 left_path = self.current_pair[0]
                 img = Image.open(left_path)
