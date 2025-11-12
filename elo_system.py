@@ -20,11 +20,13 @@ class ELOSystem:
         self.k_factor = k_factor
         self.initial_rating = initial_rating
         self.ratings = {}  # {图像路径: ELO分数}
+        self.comparison_counts = {}  # {图像路径: 比对次数}
     
     def add_image(self, image_path):
         """添加新图像到系统"""
         if image_path not in self.ratings:
             self.ratings[image_path] = self.initial_rating
+            self.comparison_counts[image_path] = 0
     
     def update_ratings(self, winner_path, loser_path):
         """
@@ -42,6 +44,10 @@ class ELOSystem:
         # 更新分数
         self.ratings[winner_path] = winner_rating + self.k_factor * (1 - expected_winner)
         self.ratings[loser_path] = loser_rating + self.k_factor * (0 - expected_loser)
+        
+        # 更新比对次数
+        self.comparison_counts[winner_path] = self.comparison_counts.get(winner_path, 0) + 1
+        self.comparison_counts[loser_path] = self.comparison_counts.get(loser_path, 0) + 1
     
     def update_ratings_draw(self, path_a, path_b):
         """
@@ -59,10 +65,18 @@ class ELOSystem:
         # 平局时 S_A = S_B = 0.5，对称更新
         self.ratings[path_a] = rating_a + self.k_factor * (0.5 - expected_a)
         self.ratings[path_b] = rating_b + self.k_factor * (0.5 - expected_b)
+        
+        # 更新比对次数
+        self.comparison_counts[path_a] = self.comparison_counts.get(path_a, 0) + 1
+        self.comparison_counts[path_b] = self.comparison_counts.get(path_b, 0) + 1
     
     def get_rating(self, image_path):
         """获取图像的ELO分数"""
         return self.ratings.get(image_path, self.initial_rating)
+    
+    def get_comparison_count(self, image_path):
+        """获取图像的比对次数"""
+        return self.comparison_counts.get(image_path, 0)
     
     def set_parameters(self, k_factor, initial_rating):
         """设置ELO参数"""
@@ -703,11 +717,14 @@ class ELOSystemGUI:
                         self.initial_rating_var.set(float(scores_data['initial_rating']))
                     # 更新ELO系统参数
                     self.update_parameters()
-                    # 加载分数
+                    # 加载分数和比对次数
                     if 'scores' in scores_data:
                         for img_path, score in scores_data['scores'].items():
                             if os.path.exists(img_path) and img_path in self.image_list:
                                 self.elo_system.ratings[img_path] = float(score)
+                                # 加载比对次数
+                                if 'image_comparison_counts' in scores_data and img_path in scores_data['image_comparison_counts']:
+                                    self.elo_system.comparison_counts[img_path] = int(scores_data['image_comparison_counts'][img_path])
                 except:
                     # 如果加载失败，重置计数
                     self.comparison_count = 0
@@ -749,8 +766,9 @@ class ELOSystemGUI:
                 dir_display = os.path.dirname(img_path)
             
             rating = self.elo_system.get_rating(img_path)
+            comparison_count = self.elo_system.get_comparison_count(img_path)
             # 格式化显示文本，确保完整显示
-            display_text = f"{dir_display} {filename} | ELO: {rating:.1f}"
+            display_text = f"{dir_display} {filename} | ELO: {rating:.1f} | 比对: {comparison_count}次"
             self.image_listbox.insert(tk.END, display_text)
     
     def on_image_select(self, event):
@@ -814,10 +832,12 @@ class ELOSystemGUI:
                 'comparison_count': self.comparison_count,
                 'k_factor': float(self.k_factor_var.get()),
                 'initial_rating': float(self.initial_rating_var.get()),
-                'scores': {}
+                'scores': {},
+                'image_comparison_counts': {}
             }
             for img_path in self.image_list:
                 scores_data['scores'][img_path] = float(self.elo_system.get_rating(img_path))
+                scores_data['image_comparison_counts'][img_path] = self.elo_system.get_comparison_count(img_path)
             
             # 确保目录存在
             os.makedirs(os.path.dirname(self.scores_file) or '.', exist_ok=True)
@@ -869,11 +889,14 @@ class ELOSystemGUI:
             # 更新ELO系统参数
             self.update_parameters()
             
-            # 加载分数
+            # 加载分数和比对次数
             loaded_count = 0
             for img_path, score in scores_data['scores'].items():
                 if os.path.exists(img_path):
                     self.elo_system.ratings[img_path] = float(score)
+                    # 加载比对次数
+                    if 'image_comparison_counts' in scores_data and img_path in scores_data['image_comparison_counts']:
+                        self.elo_system.comparison_counts[img_path] = int(scores_data['image_comparison_counts'][img_path])
                     loaded_count += 1
             
             # 更新显示
